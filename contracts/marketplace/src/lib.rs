@@ -12,8 +12,8 @@ use soroban_sdk::{
 };
 
 const DAY_LEDGERS: u32 = 17_280; // ~5s per ledger
-const TTL_THRESHOLD: u32 = 30 * DAY_LEDGERS;
-const TTL_EXTEND: u32 = 120 * DAY_LEDGERS;
+const TTL_THRESHOLD: u32 = DAY_LEDGERS;
+const TTL_EXTEND: u32 = 7 * DAY_LEDGERS;
 const MAX_FEE_BPS: u32 = 1_000; // 10%
 
 /// 0 = Antique, 1 = Handmade
