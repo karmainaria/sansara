@@ -1,10 +1,14 @@
 #![no_std]
-//! Marketplace for antiques & handmade goods on Stellar (Soroban).
+//! Relic & Thread — marketplace for antiques & handmade goods on Stellar (Soroban).
 //!
-//! Flow (escrow):
-//!   seller: list_item  ->  buyer: buy (funds locked in contract)
-//!   -> buyer: confirm_receipt (seller paid, platform fee to admin)
+//! Flow:
+//!   seller: submit_item(photos)            -> status Pending (no price yet)
+//!   AI appraiser: appraise(id, title, ...)  -> status Listed, price set by the AI
+//!   buyer: buy (funds locked in escrow) -> buyer: confirm_receipt (seller paid, fee to admin)
 //!   alternatives: seller cancel_listing / seller refund / admin resolve_dispute
+//!
+//! Only the appraiser address (an AI agent with its own Stellar key) can set a price.
+//! Sellers cannot change it; if they disagree they can withdraw the item.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
@@ -29,6 +33,7 @@ pub enum Status {
     Completed = 3,
     Refunded = 4,
     Cancelled = 5,
+    Pending = 6,
 }
 
 #[contracttype]
@@ -39,11 +44,14 @@ pub struct Item {
     pub buyer: Option<Address>,
     pub title: String,
     pub description: String,
+    /// One or more photo URLs, separated by spaces
     pub image_url: String,
     pub category: u32,
     pub price: i128,
     pub status: Status,
     pub created_at: u64,
+    /// AI appraisal as compact JSON (era, origin, maker, story, value in EUR, confidence...)
+    pub report: String,
 }
 
 #[contracttype]
@@ -53,6 +61,7 @@ enum DataKey {
     Token,
     FeeBps,
     Count,
+    Appraiser,
     Item(u64),
 }
 
@@ -69,6 +78,7 @@ pub enum Error {
     SelfPurchase = 7,
     InvalidFee = 8,
     NotParty = 9,
+    NoPhotos = 10,
 }
 
 #[contract]
@@ -76,8 +86,8 @@ pub struct Marketplace;
 
 #[contractimpl]
 impl Marketplace {
-    /// Runs once at deploy. `token` = Stellar Asset Contract (e.g. native XLM or USDC).
-    pub fn __constructor(env: Env, admin: Address, token: Address, fee_bps: u32) {
+    /// `token` = Stellar Asset Contract (native XLM or USDC). `appraiser` = AI agent's address.
+    pub fn __constructor(env: Env, admin: Address, token: Address, fee_bps: u32, appraiser: Address) {
         if fee_bps > MAX_FEE_BPS {
             panic!("fee too high");
         }
@@ -85,72 +95,48 @@ impl Marketplace {
         s.set(&DataKey::Admin, &admin);
         s.set(&DataKey::Token, &token);
         s.set(&DataKey::FeeBps, &fee_bps);
+        s.set(&DataKey::Appraiser, &appraiser);
         s.set(&DataKey::Count, &0u64);
     }
 
     // ---------------- seller ----------------
 
-    pub fn list_item(
-        env: Env,
-        seller: Address,
-        title: String,
-        description: String,
-        image_url: String,
-        category: u32,
-        price: i128,
-    ) -> Result<u64, Error> {
+    /// Seller only provides photos. Title, story and price come from the AI appraiser.
+    pub fn submit_item(env: Env, seller: Address, image_url: String) -> Result<u64, Error> {
         seller.require_auth();
-        if price <= 0 {
-            return Err(Error::InvalidPrice);
-        }
-        if category != CAT_ANTIQUE && category != CAT_HANDMADE {
-            return Err(Error::InvalidCategory);
+        if image_url.len() == 0 {
+            return Err(Error::NoPhotos);
         }
         let id: u64 = env.storage().instance().get(&DataKey::Count).unwrap_or(0) + 1;
+        let empty = String::from_str(&env, "");
         let item = Item {
             id,
             seller: seller.clone(),
             buyer: None,
-            title,
-            description,
+            title: empty.clone(),
+            description: empty.clone(),
             image_url,
-            category,
-            price,
-            status: Status::Listed,
+            category: CAT_ANTIQUE,
+            price: 0,
+            status: Status::Pending,
             created_at: env.ledger().timestamp(),
+            report: empty,
         };
         save(&env, &item);
         env.storage().instance().set(&DataKey::Count, &id);
         bump_instance(&env);
-        env.events()
-            .publish((symbol_short!("listed"), seller), (id, price));
+        env.events().publish((symbol_short!("submit"), seller), id);
         Ok(id)
     }
 
-    pub fn update_price(env: Env, seller: Address, id: u64, price: i128) -> Result<(), Error> {
-        seller.require_auth();
-        let mut item = load(&env, id)?;
-        if item.seller != seller {
-            return Err(Error::NotSeller);
-        }
-        if item.status != Status::Listed {
-            return Err(Error::WrongStatus);
-        }
-        if price <= 0 {
-            return Err(Error::InvalidPrice);
-        }
-        item.price = price;
-        save(&env, &item);
-        Ok(())
-    }
-
+    /// Withdraw an item that is not sold yet (pending or listed).
     pub fn cancel_listing(env: Env, seller: Address, id: u64) -> Result<(), Error> {
         seller.require_auth();
         let mut item = load(&env, id)?;
         if item.seller != seller {
             return Err(Error::NotSeller);
         }
-        if item.status != Status::Listed {
+        if item.status != Status::Listed && item.status != Status::Pending {
             return Err(Error::WrongStatus);
         }
         item.status = Status::Cancelled;
@@ -174,6 +160,41 @@ impl Marketplace {
         item.status = Status::Refunded;
         save(&env, &item);
         env.events().publish((symbol_short!("refund"), buyer), id);
+        Ok(())
+    }
+
+    // ---------------- AI appraiser ----------------
+
+    /// Called by the AI agent after examining the photos. Sets identity, story and price.
+    pub fn appraise(
+        env: Env,
+        id: u64,
+        title: String,
+        description: String,
+        category: u32,
+        price: i128,
+        report: String,
+    ) -> Result<(), Error> {
+        read_appraiser(&env).require_auth();
+        let mut item = load(&env, id)?;
+        if item.status != Status::Pending {
+            return Err(Error::WrongStatus);
+        }
+        if price <= 0 {
+            return Err(Error::InvalidPrice);
+        }
+        if category != CAT_ANTIQUE && category != CAT_HANDMADE {
+            return Err(Error::InvalidCategory);
+        }
+        item.title = title;
+        item.description = description;
+        item.category = category;
+        item.price = price;
+        item.report = report;
+        item.status = Status::Listed;
+        save(&env, &item);
+        env.events()
+            .publish((symbol_short!("appraised"),), (id, price));
         Ok(())
     }
 
@@ -266,6 +287,11 @@ impl Marketplace {
         env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
 
+    pub fn set_appraiser(env: Env, appraiser: Address) {
+        read_admin(&env).require_auth();
+        env.storage().instance().set(&DataKey::Appraiser, &appraiser);
+    }
+
     // ---------------- views ----------------
 
     pub fn get_item(env: Env, id: u64) -> Result<Item, Error> {
@@ -302,12 +328,20 @@ impl Marketplace {
     pub fn get_admin(env: Env) -> Address {
         read_admin(&env)
     }
+
+    pub fn get_appraiser(env: Env) -> Address {
+        read_appraiser(&env)
+    }
 }
 
 // ---------------- helpers ----------------
 
 fn read_admin(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn read_appraiser(env: &Env) -> Address {
+    env.storage().instance().get(&DataKey::Appraiser).unwrap()
 }
 
 fn token_client(env: &Env) -> token::Client<'_> {

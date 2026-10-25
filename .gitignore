@@ -1,2 +1,4 @@
 target/
 .stellar/
+server/.env
+server/appraiser.log

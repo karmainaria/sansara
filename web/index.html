@@ -59,6 +59,23 @@ textarea{min-height:90px;resize:vertical}
 .banner{background:var(--card);border:1px dashed var(--gold);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:16px}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:10px;font-size:14px;max-width:calc(100% - 32px);display:none;z-index:10}
 .actions{display:flex;gap:6px;flex-wrap:wrap}
+.drop{border:1.5px dashed var(--line);border-radius:12px;padding:22px;text-align:center;color:var(--muted);cursor:pointer;background:var(--paper)}
+.drop strong{color:var(--ink);display:block;font-size:16px;margin-bottom:4px}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap}
+.thumbs img{width:76px;height:76px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+.appraisal{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:560px;display:grid;gap:10px;margin-top:16px}
+.appraisal h2{font:600 28px/1.1 "Cormorant Garamond",serif;margin:0}
+.facts{display:grid;grid-template-columns:110px 1fr;gap:6px 12px;font-size:14px}
+.facts dt{color:var(--muted)} .facts dd{margin:0}
+.bigprice{font:600 30px/1 "Cormorant Garamond",serif;color:var(--accent)}
+.pill{display:inline-block;font:600 11px Inter;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--gold);color:var(--gold)}
+details.ai{font-size:13px;color:var(--muted);margin-top:4px}
+details.ai summary{cursor:pointer;color:var(--gold);font-weight:600}
+details.ai p{margin:6px 0 0}
+.working{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--gold);animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:.3}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.dot{animation:none}}
 .actions .btn{padding:7px 11px;font-size:13px}
 @media (max-width:520px){.two{grid-template-columns:1fr} .logo{font-size:22px}}
 </style>
@@ -90,18 +107,15 @@ textarea{min-height:90px;resize:vertical}
   </section>
 
   <section id="sell" hidden>
-    <div class="hero"><h1>List a piece</h1><p>It goes on-chain under your wallet. You get paid when the buyer confirms receipt.</p></div>
+    <div class="hero"><h1>Just take photos.</h1><p>Our AI appraiser reads the marks and stamps, dates the piece, tells its story and sets a fair price on-chain. You don’t name a price; you can always withdraw the piece.</p></div>
     <form id="sellForm">
-      <label>Title<input name="title" required maxlength="80"></label>
-      <label>Description<textarea name="description" required maxlength="600"></textarea></label>
-      <label>Image URL<input name="image" type="url" placeholder="https://…" required></label>
-      <div class="two">
-        <label>Category<select name="category"><option value="0">Antique</option><option value="1">Handmade</option></select></label>
-        <label>Price (<span class="sym">XLM</span>)<input name="price" type="number" min="0.0000001" step="0.0000001" required></label>
-      </div>
-      <button class="btn" type="submit">List on Stellar</button>
-      <div class="note">Platform fee is taken only from completed sales.</div>
+      <label class="drop" for="photos"><strong>Add 1–4 photos</strong>Whole piece, close-up of any marks, stamps or signature, and the underside.</label>
+      <input id="photos" type="file" accept="image/*" multiple hidden>
+      <div class="thumbs" id="thumbs"></div>
+      <button class="btn" type="submit" id="appraiseBtn" disabled>Appraise with AI &amp; list</button>
+      <div class="note" id="sellNote">Platform fee of 2.5% is taken only from completed sales.</div>
     </form>
+    <div id="appraisal"></div>
   </section>
 
   <section id="mine" hidden>
@@ -114,10 +128,11 @@ textarea{min-height:90px;resize:vertical}
 <script>
 // ================= CONFIG =================
 const CONFIG = {
-  CONTRACT_ID: "CABGIFZGNV4YPKYB2EDKWQXONJIAZEQHPZ25EWSX3WIXOD3QWOLEEMVT",
+  CONTRACT_ID: "CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O",
   NETWORK: "TESTNET",                 // or "PUBLIC"
   RPC_URL: "https://soroban-testnet.stellar.org",
   TOKEN_SYMBOL: "XLM",
+  APPRAISER_URL: "https://neglected-cape-gx6jrq55qxwjf96vx-8787.app.github.dev",                  // AI appraiser server
   DECIMALS: 7,
 };
 // ==========================================
@@ -126,9 +141,9 @@ const S = window.StellarSdk;
 const F = window.freighterApi;
 const PASSPHRASE = S.Networks[CONFIG.NETWORK];
 const server = new S.rpc.Server(CONFIG.RPC_URL);
-const STATUS = ["Listed","Paid","Disputed","Completed","Refunded","Cancelled"];
+const STATUS = ["Listed","Paid","Disputed","Completed","Refunded","Cancelled","Pending"];
 const CAT = ["Antique","Handmade"];
-const ERR = {1:"Item not found",2:"Invalid price",3:"Invalid category",4:"Not possible in this state",5:"Only the buyer can do this",6:"Only the seller can do this",7:"You can't buy your own item",8:"Invalid fee",9:"Not part of this deal"};
+const ERR = {1:"Item not found",2:"Invalid price",3:"Invalid category",4:"Not possible in this state",5:"Only the buyer can do this",6:"Only the seller can do this",7:"You can't buy your own item",8:"Invalid fee",9:"Not part of this deal",10:"Add at least one photo"};
 let me = null, items = [], cat = "all";
 const DEMO = !CONFIG.CONTRACT_ID;
 
@@ -228,25 +243,40 @@ function placeholder(it){
   return "data:image/svg+xml," + encodeURIComponent(svg);
 }
 
+function parseReport(r){
+  const o = {}; String(r||"").split("\n").forEach(l => { const i = l.indexOf(":"); if (i>0) o[l.slice(0,i).trim()] = l.slice(i+1).trim(); });
+  return o;
+}
+const firstImg = u => String(u||"").split(/\s+/).filter(Boolean)[0];
+
+function aiDetails(it){
+  const r = parseReport(it.report); if (!r.era && !r.story) return "";
+  const row = (k,v) => v && v!=="unknown" ? `<p><b>${k}:</b> ${esc(v)}</p>` : "";
+  return `<details class="ai"><summary>AI appraisal · ${esc(r.confidence||"")} confidence</summary>
+    ${row("Era",r.era)}${row("Origin",r.origin)}${row("Maker",r.maker)}${row("Marks",r.marks)}${row("Materials",r.materials)}
+    ${row("Condition",r.condition)}${row("Story",r.story)}${row("Market value",r.value)}${row("Why this price",r.reasoning)}</details>`;
+}
+
 function card(it, mode){
   const st = STATUS[Number(it.status)];
   const isSeller = me && it.seller === me, isBuyer = me && it.buyer === me;
   let act = "";
   if (mode === "shop" && st === "Listed" && !isSeller) act = `<button class="btn" data-a="buy" data-id="${it.id}">Buy</button>`;
   if (mode === "mine"){
-    if (isSeller && st==="Listed")  act += `<button class="btn ghost" data-a="cancel_listing" data-id="${it.id}">Cancel</button>`;
+    if (isSeller && (st==="Listed"||st==="Pending"))  act += `<button class="btn ghost" data-a="cancel_listing" data-id="${it.id}">Cancel</button>`;
     if (isSeller && (st==="Paid"||st==="Disputed")) act += `<button class="btn ghost" data-a="refund" data-id="${it.id}">Refund</button>`;
     if (isBuyer && st==="Paid") act += `<button class="btn" data-a="confirm_receipt" data-id="${it.id}">Got it ✓</button>`;
     if ((isBuyer||isSeller) && st==="Paid") act += `<button class="btn ghost" data-a="open_dispute" data-id="${it.id}">Dispute</button>`;
   }
   const who = mode==="mine" ? `<span class="status">${isSeller?"selling":"bought"}</span>` : "";
   return `<article class="card">
-    <div class="img" style="background-image:url('${esc(it.image_url || placeholder(it))}')"></div>
+    <div class="img" style="background-image:url('${esc(firstImg(it.image_url) || placeholder(it))}')"></div>
     <div class="body">
       <span class="tag">${CAT[Number(it.category)]||""} · #${it.id}</span>
-      <h3>${esc(it.title)}</h3>
+      <h3>${esc(it.title || "Awaiting AI appraisal")}</h3>
       <p>${esc(it.description)}</p>
-      <div class="row"><span class="price">${fromUnits(it.price)} ${CONFIG.TOKEN_SYMBOL}</span><span class="status ${st}">${st==="Listed"?"":st}</span></div>
+      ${aiDetails(it)}
+      <div class="row"><span class="price">${st==="Pending" ? "—" : fromUnits(it.price)+" "+CONFIG.TOKEN_SYMBOL}${parseReport(it.report).price_eur ? ` <span class="status">≈ €${esc(parseReport(it.report).price_eur)}</span>`:""}</span><span class="status ${st}">${st==="Listed"?"":st}</span></div>
       ${act||who ? `<div class="row"><div class="actions">${act}</div>${who}</div>` : ""}
     </div></article>`;
 }
@@ -281,19 +311,70 @@ document.body.addEventListener("click", async e => {
   } catch(err){ toast(niceError(err)); b.disabled = false; }
 });
 
+let photos = [];
+function shrink(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas"); c.width = Math.round(img.width*k); c.height = Math.round(img.height*k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => reject(new Error("Could not read that photo"));
+    img.src = url;
+  });
+}
+$("#photos").onchange = async e => {
+  try {
+    const add = await Promise.all([...e.target.files].map(shrink));
+    photos = [...photos, ...add].slice(0, 4);
+  } catch(err){ toast(err.message); }
+  $("#thumbs").innerHTML = photos.map(p => `<img src="${p}" alt="Photo of the piece">`).join("");
+  $("#appraiseBtn").disabled = !photos.length;
+  e.target.value = "";
+};
+
+async function api(path, body){
+  if (!CONFIG.APPRAISER_URL) throw new Error("The AI appraiser is offline right now");
+  const r = await fetch(CONFIG.APPRAISER_URL.replace(/\/$/,"") + path, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || "Appraiser error " + r.status);
+  return j;
+}
+
+function showAppraisal(res){
+  const a = res.appraisal, f = (k,v) => v && v!=="unknown" ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "";
+  $("#appraisal").innerHTML = `<div class="appraisal">
+    <span class="pill">${a.category==="handmade"?"Handmade":"Antique"} · ${esc(a.confidence)} confidence · #${res.id}</span>
+    <h2>${esc(a.title)}</h2>
+    <div class="bigprice">${res.price_xlm.toFixed(2)} XLM <span class="status">≈ €${Math.round(a.price_eur)}</span></div>
+    <p class="note">${esc(a.short_description)}</p>
+    <dl class="facts">${f("Era",a.era)}${f("Origin",a.origin)}${f("Maker",a.maker)}${f("Marks",a.marks)}${f("Materials",a.materials)}${f("Condition",a.condition)}${f("Market value",`€${Math.round(a.value_eur_low)}–${Math.round(a.value_eur_high)}`)}</dl>
+    <p>${esc(a.story)}</p>
+    <p class="note">${esc(a.reasoning)}</p>
+    <div class="actions"><button class="btn" type="button" onclick="document.querySelector('nav [data-tab=shop]').click()">See it in the shop</button></div>
+  </div>`;
+}
+
 $("#sellForm").onsubmit = async e => {
   e.preventDefault();
   if (DEMO) return toast("Demo mode — deploy the contract to list for real");
-  const f = new FormData(e.target), btn = e.target.querySelector("button");
-  btn.disabled = true; toast("Confirm in Freighter…", 8000);
+  const btn = $("#appraiseBtn"); btn.disabled = true;
+  const step = t => $("#appraisal").innerHTML = `<div class="appraisal"><div class="working"><span class="dot"></span>${t}</div></div>`;
   try {
-    if (!me) await connect();
-    const id = await write("list_item", A.addr(me), A.str(f.get("title")), A.str(f.get("description")),
-      A.str(f.get("image")), A.u32(f.get("category")), A.i128(toUnits(f.get("price"))));
-    toast(`Listed as #${id}`); e.target.reset(); await load();
-    document.querySelector('nav [data-tab="shop"]').click();
-  } catch(err){ toast(niceError(err)); }
-  btn.disabled = false;
+    step("Uploading photos…");
+    const { image_url } = await api("/upload", { images: photos });
+    let id = null;
+    if (me) { step("Confirm the listing in Freighter…"); id = await write("submit_item", A.addr(me), A.str(image_url)); }
+    step("The appraiser is reading the marks and dating your piece… (about 20 seconds)");
+    const res = await api("/appraise", id ? { id: Number(id) } : { image_url });
+    showAppraisal(res);
+    photos = []; $("#thumbs").innerHTML = "";
+    if (!me) $("#sellNote").textContent = "Listed with the demo seller account. Connect Freighter to list under your own wallet.";
+    load();
+  } catch(err){ $("#appraisal").innerHTML = ""; toast(niceError(err), 6000); }
+  btn.disabled = !photos.length;
 };
 
 load();
