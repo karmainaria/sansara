@@ -2,3 +2,5 @@ target/
 .stellar/
 server/.env
 server/appraiser.log
+node_modules/
+.netlify/

@@ -1,0 +1,1 @@
+{"name":"relic-and-thread","private":true,"type":"module","dependencies":{"@netlify/blobs":"^11.1.6","@stellar/stellar-sdk":"^14.6.1"}}

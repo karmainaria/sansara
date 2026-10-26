@@ -282,6 +282,16 @@ grep -q '^.netlify' .gitignore 2>/dev/null || echo '.netlify/' >> .gitignore
 echo "== Installing packages =="
 npm install --silent @stellar/stellar-sdk@14 @netlify/blobs
 
+echo "== Rounding prices to 2 decimals =="
+python3 - <<'PYEOF'
+for p in ['web/index.html','docs/index.html']:
+    s=open(p).read()
+    s=s.replace('fromUnits(it.price)+" "+CONFIG.TOKEN_SYMBOL','fmtPrice(it.price)+" "+CONFIG.TOKEN_SYMBOL')
+    if 'function fmtPrice' not in s:
+        s=s.replace('function fromUnits(n){','function fmtPrice(n){ return (Number(BigInt(n))/1e7).toLocaleString("en-US",{maximumFractionDigits:2}); }\nfunction fromUnits(n){',1)
+    open(p,'w').write(s)
+PYEOF
+
 echo "== Pointing the website to Netlify =="
 URL="https://$SITE.netlify.app/api"
 for f in web/index.html docs/index.html; do sed -i "s|APPRAISER_URL: \"[^\"]*\"|APPRAISER_URL: \"$URL\"|" $f; done

@@ -140,6 +140,7 @@ function toast(msg, ms = 3500){ const t=$("#toast"); t.textContent=msg; t.style.
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const short = a => a ? a.slice(0,4)+"…"+a.slice(-4) : "";
 function toUnits(str){ const [w,f=""]=String(str).split("."); return BigInt(w||0)*10n**BigInt(CONFIG.DECIMALS)+BigInt((f+"0".repeat(CONFIG.DECIMALS)).slice(0,CONFIG.DECIMALS)); }
+function fmtPrice(n){ return (Number(BigInt(n))/1e7).toLocaleString("en-US",{maximumFractionDigits:2}); }
 function fromUnits(n){ n=BigInt(n); const d=10n**BigInt(CONFIG.DECIMALS); const f=(n%d).toString().padStart(CONFIG.DECIMALS,"0").replace(/0+$/,""); return (n/d).toString()+(f?"."+f:""); }
 function niceError(e){ const m=String(e?.message||e); const c=m.match(/Error\(Contract, #(\d+)\)/); return c ? (ERR[c[1]]||m) : m.slice(0,160); }
 
