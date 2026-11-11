@@ -174,6 +174,7 @@ function toast(msg, ms = 3500){ const t=$("#toast"); t.textContent=msg; t.style.
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const short = a => a ? a.slice(0,4)+"…"+a.slice(-4) : "";
 function toUnits(str){ const [w,f=""]=String(str).split("."); return BigInt(w||0)*10n**BigInt(CONFIG.DECIMALS)+BigInt((f+"0".repeat(CONFIG.DECIMALS)).slice(0,CONFIG.DECIMALS)); }
+function fmtPrice(n){ return (Number(BigInt(n))/1e7).toLocaleString("en-US",{maximumFractionDigits:2}); }
 function fromUnits(n){ n=BigInt(n); const d=10n**BigInt(CONFIG.DECIMALS); const f=(n%d).toString().padStart(CONFIG.DECIMALS,"0").replace(/0+$/,""); return (n/d).toString()+(f?"."+f:""); }
 function niceError(e){ const m=String(e?.message||e); const c=m.match(/Error\(Contract, #(\d+)\)/); return c ? (ERR[c[1]]||m) : m.slice(0,160); }
 
@@ -373,7 +374,7 @@ function card(it, mode){
       <h3>${esc(it.title || "Awaiting AI appraisal")}</h3>
       <p>${esc(it.description)}</p>
       ${aiDetails(it)}
-      <div class="row"><span class="price">${st==="Pending" ? "—" : fromUnits(it.price)+" "+CONFIG.TOKEN_SYMBOL}${parseReport(it.report).price_eur ? ` <span class="status">≈ €${esc(parseReport(it.report).price_eur)}</span>`:""}</span><span class="status ${st}">${st==="Listed"?"":st}</span></div>
+      <div class="row"><span class="price">${st==="Pending" ? "—" : fmtPrice(it.price)+" "+CONFIG.TOKEN_SYMBOL}${parseReport(it.report).price_eur ? ` <span class="status">≈ €${esc(parseReport(it.report).price_eur)}</span>`:""}</span><span class="status ${st}">${st==="Listed"?"":st}</span></div>
       ${act||who ? `<div class="row"><div class="actions">${act}</div>${who}</div>` : ""}
     </div></article>`;
 }
@@ -445,7 +446,7 @@ function showAppraisal(res){
   $("#appraisal").innerHTML = `<div class="appraisal">
     <span class="pill">${a.category==="handmade"?"Handmade":"Antique"} · ${esc(a.confidence)} confidence · #${res.id}</span>
     <h2>${esc(a.title)}</h2>
-    <div class="bigprice">${res.price_xlm.toFixed(2)} XLM <span class="status">≈ €${Math.round(a.price_eur)}</span></div>
+    <div class="bigprice">${res.price_xlm.toLocaleString("en-US",{maximumFractionDigits:2})} XLM <span class="status">≈ €${Math.round(a.price_eur)}</span></div>
     <p class="note">${esc(a.short_description)}</p>
     <dl class="facts">${f("Era",a.era)}${f("Origin",a.origin)}${f("Maker",a.maker)}${f("Marks",a.marks)}${f("Materials",a.materials)}${f("Condition",a.condition)}${f("Market value",`€${Math.round(a.value_eur_low)}–${Math.round(a.value_eur_high)}`)}</dl>
     <p>${esc(a.story)}</p>
@@ -462,10 +463,21 @@ $("#sellForm").onsubmit = async e => {
   try {
     step("Uploading photos…");
     const { image_url } = await api("/upload", { images: photos });
-    let id = null;
-    if (me) { step("Confirm the listing in your wallet…"); id = await write("submit_item", A.addr(me), A.str(image_url)); }
+    // 1. AI first: nothing goes on-chain unless the appraisal succeeds
     step("The appraiser is reading the marks and dating your piece… (about 20 seconds)");
-    const res = await api("/appraise", id ? { id: Number(id) } : { image_url });
+    const pre = await api("/preview", { image_url });
+    let res;
+    if (me) {
+      // 2. the wallet lists the photos, 3. the appraiser writes the stored appraisal
+      step(`Appraised at ${pre.price_xlm.toLocaleString("en-US",{maximumFractionDigits:2})} XLM. Confirm the listing in your wallet…`);
+      const id = await write("submit_item", A.addr(me), A.str(image_url));
+      step("Writing the appraisal on-chain…");
+      try { res = await api("/appraise", { token: pre.token, id: Number(id) }); }
+      catch { await new Promise(r => setTimeout(r, 2500)); res = await api("/appraise", { token: pre.token, id: Number(id) }); }
+    } else {
+      step("Listing your piece on-chain…");
+      res = await api("/appraise", { token: pre.token });
+    }
     showAppraisal(res);
     photos = []; $("#thumbs").innerHTML = "";
     if (!me) $("#sellNote").textContent = "Listed with the demo seller account. Connect a wallet to list under your own name.";

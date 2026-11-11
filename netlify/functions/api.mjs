@@ -1,9 +1,15 @@
 // Relic & Thread — AI appraiser agent as a Netlify Function (runs 24/7, no Codespace needed).
 // Routes:  POST /api/upload    photos -> Netlify Blobs, returns public URLs
-//          POST /api/appraise  AI looks at the photos and writes title, story and price on-chain
+//          POST /api/preview   AI appraises the uploaded photos; nothing is written on-chain yet.
+//                              Returns { token, appraisal, price_xlm } (appraisal kept in Netlify Blobs)
+//          POST /api/appraise  writes an appraisal on-chain:
+//                                { token, id }  wallet already signed submit_item -> appraise(id) with the stored appraisal
+//                                { token }      no wallet: demo seller lists the item, then appraise
+//                                { id }         re-appraise an item stuck in Pending (runs the AI)
+//                                { image_url }  AI + list as demo seller in one call
 //          GET  /api/health
 //          GET  /img/<name>     serves uploaded photos
-// Env vars: CONTRACT_ID, APPRAISER_SECRET, SELLER_SECRET, GEMINI_API_KEY or ANTHROPIC_API_KEY,
+// Env vars: CONTRACT_ID, APPRAISER_SECRET, SELLER_SECRET, GEMINI_API_KEY (preferred) or ANTHROPIC_API_KEY,
 //           optional GEMINI_MODEL, ANTHROPIC_MODEL, RPC_URL, XLM_EUR
 
 import { getStore } from "@netlify/blobs";
@@ -61,20 +67,9 @@ function parseJSON(text) {
   return JSON.parse(m[0]);
 }
 
+// Gemini is preferred whenever GEMINI_API_KEY is set; Claude is only a fallback.
 async function askAI(images) {
   const anthropic = env("ANTHROPIC_API_KEY"), gemini = env("GEMINI_API_KEY");
-  if (anthropic) {
-    const content = images.map(i => ({ type: "image", source: { type: "base64", media_type: i.mime, data: i.b64 } }));
-    content.push({ type: "text", text: PROMPT });
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": anthropic, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: env("ANTHROPIC_MODEL") || "claude-sonnet-5-5", max_tokens: 1500, messages: [{ role: "user", content }] }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error("Claude API: " + (j.error?.message || r.status));
-    return parseJSON(j.content.map(c => c.text || "").join(""));
-  }
   if (gemini) {
     const models = [...new Set([env("GEMINI_MODEL"), "gemini-2.5-flash", "gemini-2.5-flash-lite",
       "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.0-flash"].filter(Boolean))];
@@ -100,6 +95,18 @@ async function askAI(images) {
       }
     }
     throw new Error("All AI models are busy right now, please try again in a minute. " + (lastErr?.message || ""));
+  }
+  if (anthropic) {
+    const content = images.map(i => ({ type: "image", source: { type: "base64", media_type: i.mime, data: i.b64 } }));
+    content.push({ type: "text", text: PROMPT });
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": anthropic, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: env("ANTHROPIC_MODEL") || "claude-sonnet-5-5", max_tokens: 1500, messages: [{ role: "user", content }] }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error("Claude API: " + (j.error?.message || r.status));
+    return parseJSON(j.content.map(c => c.text || "").join(""));
   }
   throw new Error("No AI key configured");
 }
@@ -177,12 +184,24 @@ function toReport(a) {
   return Object.entries(lines).map(([k, v]) => `${k}: ${clip(v, 600)}`).join("\n").slice(0, 2000);
 }
 
+// Runs the AI on the photos and turns its answer into on-chain values. Throws if the AI fails.
+async function runAppraisal(imageUrl) {
+  const a = await askAI(await loadImages(imageUrl));
+  if (!a || !a.title) throw new Error("The appraiser could not read these photos, please try again");
+  const rate = await eurPerXlm();
+  const priceEur = Math.max(1, Number(a.price_eur) || 0);
+  const stroops = String(Math.max(1, Math.round((priceEur / rate) * 1e7)));
+  const category = String(a.category).toLowerCase() === "handmade" ? 1 : 0;
+  return { appraisal: a, rate, stroops, category };
+}
+
 // ---------------------------------------------------------------- handler
 
 export default async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const url = new URL(req.url);
   const photos = getStore({ name: "photos", consistency: "strong" });
+  const previews = getStore({ name: "previews", consistency: "strong" });
 
   try {
     if (url.pathname.startsWith("/img/")) {
@@ -195,7 +214,7 @@ export default async (req) => {
     if (url.pathname === "/api/health")
       return json(200, {
         ok: true,
-        provider: env("ANTHROPIC_API_KEY") ? "anthropic" : env("GEMINI_API_KEY") ? "gemini" : null,
+        provider: env("GEMINI_API_KEY") ? "gemini" : env("ANTHROPIC_API_KEY") ? "anthropic" : null,
         contract: env("CONTRACT_ID") || null,
         appraiser: env("APPRAISER_SECRET") ? Keypair.fromSecret(env("APPRAISER_SECRET")).publicKey() : null,
       });
@@ -220,21 +239,32 @@ export default async (req) => {
       return json(200, { image_url: urls.join(" ") });
     }
 
+    if (url.pathname === "/api/preview") {
+      if (!body.image_url) throw new Error("image_url required");
+      const p = await runAppraisal(body.image_url);
+      const token = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      await previews.setJSON(token, { ...p, image_url: body.image_url, created: Date.now() });
+      return json(200, { token, appraisal: p.appraisal, price_xlm: Number(p.stroops) / 1e7, eur_per_xlm: p.rate });
+    }
+
     if (url.pathname === "/api/appraise") {
-      let id = body.id, imageUrl = body.image_url;
+      let id = body.id, imageUrl = body.image_url, p;
+      if (body.token) {
+        const saved = await previews.get(String(body.token), { type: "json" });
+        if (!saved) throw new Error("Appraisal expired, please try again");
+        p = saved; imageUrl = saved.image_url;
+      }
       if (id) {
         const item = await read("get_item", V.u64(id));
         if (Number(item.status) !== 6) throw new Error("Item is not waiting for appraisal");
+        if (p && item.image_url !== imageUrl) throw new Error("This appraisal belongs to other photos");
         imageUrl = item.image_url;
       }
       if (!imageUrl) throw new Error("image_url required");
 
-      // AI first, so nothing is written on-chain if it fails
-      const a = await askAI(await loadImages(imageUrl));
-      const rate = await eurPerXlm();
-      const priceEur = Math.max(1, Number(a.price_eur) || 0);
-      const stroops = BigInt(Math.max(1, Math.round((priceEur / rate) * 1e7)));
-      const category = String(a.category).toLowerCase() === "handmade" ? 1 : 0;
+      // AI first (unless already done in /preview), so nothing is written on-chain if it fails
+      if (!p) p = await runAppraisal(imageUrl);
+      const a = p.appraisal;
 
       if (!id) {
         // no wallet: list as the demo seller
@@ -243,9 +273,10 @@ export default async (req) => {
       }
       const tx = await invoke(env("APPRAISER_SECRET"), "appraise",
         V.u64(id), V.str(clip(a.title, 60) || "Untitled piece"), V.str(clip(a.short_description, 220)),
-        V.u32(category), V.i128(stroops), V.str(toReport(a)));
+        V.u32(p.category), V.i128(BigInt(p.stroops)), V.str(toReport(a)));
+      if (body.token) await previews.delete(String(body.token)).catch(() => {});
 
-      return json(200, { id: Number(id), appraisal: a, price_xlm: Number(stroops) / 1e7, eur_per_xlm: rate, tx: tx.hash });
+      return json(200, { id: Number(id), appraisal: a, price_xlm: Number(p.stroops) / 1e7, eur_per_xlm: p.rate, tx: tx.hash });
     }
 
     return json(404, { error: "not found" });
