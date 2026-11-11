@@ -11,8 +11,8 @@
 //! Sellers cannot change it; if they disagree they can withdraw the item.
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    String, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, BytesN,
+    Env, String, Vec,
 };
 
 const DAY_LEDGERS: u32 = 17_280; // ~5s per ledger
@@ -20,9 +20,10 @@ const TTL_THRESHOLD: u32 = DAY_LEDGERS;
 const TTL_EXTEND: u32 = 7 * DAY_LEDGERS;
 const MAX_FEE_BPS: u32 = 1_000; // 10%
 
-/// 0 = Antique, 1 = Handmade
+/// 0 = Antique (~100+ years), 1 = Handmade, 2 = Vintage (20–99 years)
 pub const CAT_ANTIQUE: u32 = 0;
 pub const CAT_HANDMADE: u32 = 1;
+pub const CAT_VINTAGE: u32 = 2;
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,7 +184,7 @@ impl Marketplace {
         if price <= 0 {
             return Err(Error::InvalidPrice);
         }
-        if category != CAT_ANTIQUE && category != CAT_HANDMADE {
+        if category != CAT_ANTIQUE && category != CAT_HANDMADE && category != CAT_VINTAGE {
             return Err(Error::InvalidCategory);
         }
         item.title = title;
@@ -290,6 +291,12 @@ impl Marketplace {
     pub fn set_appraiser(env: Env, appraiser: Address) {
         read_admin(&env).require_auth();
         env.storage().instance().set(&DataKey::Appraiser, &appraiser);
+    }
+
+    /// Admin only: replace the contract code, keeping its address and all items.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        read_admin(&env).require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     // ---------------- views ----------------

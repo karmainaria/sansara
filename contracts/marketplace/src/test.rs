@@ -186,3 +186,20 @@ fn listing_newest_first() {
     assert_eq!(items.get(0).unwrap().id, 3);
     assert_eq!(items.get(1).unwrap().id, 2);
 }
+
+#[test]
+fn vintage_category() {
+    let st = setup();
+    let id = st.client.submit_item(&st.seller, &s(&st.env, "https://x/radio.jpg"));
+    let t = s(&st.env, "Bakelite radio, 1960s");
+    st.client.appraise(&id, &t, &t, &CAT_VINTAGE, &40_0000000, &s(&st.env, "class: vintage"));
+    assert_eq!(st.client.get_item(&id).category, CAT_VINTAGE);
+}
+
+#[test]
+fn only_admin_can_upgrade() {
+    let st = setup();
+    st.env.set_auths(&[]);
+    let hash = BytesN::from_array(&st.env, &[0u8; 32]);
+    assert!(st.client.try_upgrade(&hash).is_err());
+}

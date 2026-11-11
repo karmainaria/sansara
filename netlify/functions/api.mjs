@@ -213,8 +213,8 @@ async function runAppraisal(imageUrl, budgetMs) {
   const rate = await eurPerXlm();
   const priceEur = Math.max(1, Number(a.price_eur) || 0);
   const stroops = String(Math.max(1, Math.round((priceEur / rate) * 1e7)));
-  // until the contract has a vintage category: antique and vintage are both on-chain category 0
-  const category = a.class === "handmade" ? 1 : 0;
+  // on-chain category: 0 antique, 1 handmade, 2 vintage
+  const category = { antique: 0, handmade: 1, vintage: 2 }[a.class];
   return { appraisal: a, rate, stroops, category };
 }
 
