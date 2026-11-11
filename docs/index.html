@@ -149,7 +149,7 @@ details.ai p{margin:6px 0 0}
 <script>
 // ================= CONFIG =================
 const CONFIG = {
-  CONTRACT_ID: "CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O",
+  CONTRACT_ID: "CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K",
   NETWORK: "TESTNET",                 // or "PUBLIC"
   RPC_URL: "https://soroban-testnet.stellar.org",
   TOKEN_SYMBOL: "XLM",
@@ -348,8 +348,8 @@ function parseReport(r){
   const o = {}; String(r||"").split("\n").forEach(l => { const i = l.indexOf(":"); if (i>0) o[l.slice(0,i).trim()] = l.slice(i+1).trim(); });
   return o;
 }
-// antique / vintage / handmade: from the AI report ("class"), else from the on-chain category
-const classOf = it => { const c = parseReport(it.report).class; return ["antique","vintage","handmade"].includes(c) ? c : (Number(it.category) ? "handmade" : "antique"); };
+// antique / vintage / handmade: from the AI report ("class"), else from the on-chain category (0 antique, 1 handmade, 2 vintage)
+const classOf = it => { const c = parseReport(it.report).class; return ["antique","vintage","handmade"].includes(c) ? c : (["antique","handmade","vintage"][Number(it.category)] || "antique"); };
 const CLASS_LABEL = { antique: "Antique", vintage: "Vintage", handmade: "Handmade" };
 const firstImg = u => String(u||"").split(/\s+/).filter(Boolean)[0];
 

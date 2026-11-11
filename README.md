@@ -6,7 +6,7 @@ A marketplace for antiques and handmade pieces where the seller only takes photo
 | | |
 |---|---|
 | **Live app** | https://karmainaria.github.io/sansara/ (installable on iPhone/Android: Share → Add to Home Screen) |
-| **Contract (Testnet)** | [`CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O`](https://stellar.expert/explorer/testnet/contract/CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O) |
+| **Contract (Testnet)** | [`CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K`](https://stellar.expert/explorer/testnet/contract/CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K) |
 | **Demo video** | _link added after recording_ |
 | **Pitch deck** | https://claude.ai/artifact/HqeDWqSv3L2ZxmxtB5skH7 |
 | **Event** | HackMeridian Lisbon 2026 · Builder track: Genesis · Thematic track: Stellar Composed |
@@ -78,7 +78,7 @@ flowchart LR
 
 | Role | Address |
 |---|---|
-| Marketplace contract | [`CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O`](https://stellar.expert/explorer/testnet/contract/CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O) |
+| Marketplace contract | [`CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K`](https://stellar.expert/explorer/testnet/contract/CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K) |
 | AI appraiser agent | [`GAZMVV5DXJQ2HGY35DTJ3B4XSJOC2DB55GXBC2GJG6NDYXDOLQSQ5IDM`](https://stellar.expert/explorer/testnet/account/GAZMVV5DXJQ2HGY35DTJ3B4XSJOC2DB55GXBC2GJG6NDYXDOLQSQ5IDM) |
 | Platform admin (fee receiver) | [`GA3V22ML4UV6EP4LWAPXWABOHAJDAPE5RXORZY6DPAVM5HE2M5FWT5SZ`](https://stellar.expert/explorer/testnet/account/GA3V22ML4UV6EP4LWAPXWABOHAJDAPE5RXORZY6DPAVM5HE2M5FWT5SZ) |
 | Payment token | Native XLM via its Stellar Asset Contract `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC` |
@@ -86,7 +86,7 @@ flowchart LR
 
 ### Evidence of on-chain transactions
 
-All calls are visible on the contract page on Stellar Expert: `submit_item` (seller), `appraise` (AI agent, with the full report), `buy` (escrow), `confirm_receipt` (payout + fee). Example: item **#14**, a blue-and-white porcelain vase photographed at the entrance of the HackMeridian venue in Lisbon, appraised by the AI at ≈ €65 (430.08 XLM), bought from an iPhone with Albedo and completed.
+All calls are visible on the contract page on Stellar Expert: `submit_item` (seller), `appraise` (AI agent, with the full report), `buy` (escrow), `confirm_receipt` (payout + fee). Example (previous contract [`CBPXUJWJ…445O`](https://stellar.expert/explorer/testnet/contract/CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O), used during the hackathon): item **#14**, a blue-and-white porcelain vase photographed at the entrance of the HackMeridian venue in Lisbon, appraised by the AI at ≈ €65 (430.08 XLM), bought from an iPhone with Albedo and completed.
 
 ### Contract API
 
@@ -101,6 +101,7 @@ All calls are visible on the contract page on Stellar Expert: `submit_item` (sel
 | `open_dispute(caller, id)` | buyer or seller | Freezes the deal → `Disputed` |
 | `resolve_dispute(id, refund_buyer)` | admin | Refund buyer or pay seller |
 | `set_fee`, `set_admin`, `set_appraiser` | admin | Configuration |
+| `upgrade(new_wasm_hash)` | admin | Replace the contract code, keeping the address and all items |
 | `get_items(start, limit)`, `get_item(id)`, `item_count()` | anyone | Reads |
 
 Status codes: `0 Listed · 1 Paid · 2 Disputed · 3 Completed · 4 Refunded · 5 Cancelled · 6 Pending`.
@@ -172,7 +173,7 @@ The appraiser signs with the Stellar CLI identity named `appraiser`; the demo se
 3. **Connect:** tap *Connect wallet → Albedo*, create an account, then in *My deals* tap *Get test XLM*.
 4. **Buy:** in *Shop* tap *Buy* on any item and sign with Albedo. The item leaves the shop; the XLM is now held by the contract.
 5. **Complete:** in *My deals* tap *Got it ✓* and sign. Status becomes *Completed*; the seller and the platform are paid.
-6. Check every step on the [contract page](https://stellar.expert/explorer/testnet/contract/CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O).
+6. Check every step on the [contract page](https://stellar.expert/explorer/testnet/contract/CCWGFUOG6NZRLWRJHO7CMTKYBARPHQU2ODGWYJRO3ZIQSAF54B7GMY3K).
 
 ### AI appraiser on Netlify
 
@@ -186,7 +187,7 @@ Netlify environment variables: `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash`
 | `POST /api/preview` | AI appraises the photos; nothing is written on-chain yet. Returns `token`, appraisal, price |
 | `POST /api/appraise` | `{token,id}` writes the stored appraisal for an item the wallet just submitted; `{token}` lists it with the demo seller; `{id}` re-appraises a stuck `Pending` item |
 
-**Classes:** the AI puts every piece into one class: `antique` (about 100+ years), `vintage` (20–99 years, factory-made allowed), `handmade` (made by hand by an independent maker, any age) or `modern` (under ~20 years and factory-made). Modern pieces are rejected (`422`, nothing is written on-chain). The class is stored as `class:` in the on-chain report; on-chain `category` is `0` for antique and vintage and `1` for handmade, until the contract gets a separate vintage category.
+**Classes:** the AI puts every piece into one class: `antique` (about 100+ years), `vintage` (20–99 years, factory-made allowed), `handmade` (made by hand by an independent maker, any age) or `modern` (under ~20 years and factory-made). Modern pieces are rejected (`422`, nothing is written on-chain). The class is stored as `class:` in the on-chain report and as on-chain `category`: `0` antique, `1` handmade, `2` vintage.
 
 **Sell flow:** upload → AI preview → (wallet signs `submit_item`) → appraiser signs `appraise`. Because the AI runs first, a failed appraisal never leaves an empty *Awaiting AI appraisal* item on-chain.
 
