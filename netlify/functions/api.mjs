@@ -68,21 +68,27 @@ function parseJSON(text) {
 }
 
 // Gemini is preferred whenever GEMINI_API_KEY is set; Claude is only a fallback.
-async function askAI(images) {
+async function askAI(images, budgetMs = 24000) {
   const anthropic = env("ANTHROPIC_API_KEY"), gemini = env("GEMINI_API_KEY");
   if (gemini) {
     const models = [...new Set([env("GEMINI_MODEL"), "gemini-2.5-flash", "gemini-2.5-flash-lite",
-      "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.0-flash"].filter(Boolean))];
+      "gemini-flash-latest", "gemini-flash-lite-latest"].filter(Boolean))];
     const parts = images.map(i => ({ inline_data: { mime_type: i.mime, data: i.b64 } }));
     parts.push({ text: PROMPT });
-    let lastErr;
+    let lastErr; const errs = [];
+    const deadline = Date.now() + budgetMs; // Netlify stops the function at ~30 s
     for (const model of models) {
       for (let attempt = 0; attempt < 2; attempt++) {
+        if (lastErr && errs.at(-1) !== lastErr.message) errs.push(lastErr.message);
+        if (Date.now() > deadline - 3000) break;
         try {
+          // "thinking" makes 2.5 models much slower; an appraisal doesn't need it
+          const thinking = /2\.5/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {};
           const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemini}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.3 } }),
+            body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.3, ...thinking } }),
+            signal: AbortSignal.timeout(Math.min(12000, Math.max(3000, deadline - Date.now()))),
           });
           const j = await r.json();
           if (!r.ok) {
@@ -90,11 +96,14 @@ async function askAI(images) {
             if ([429, 500, 503].includes(r.status)) { await sleep(1200 * (attempt + 1)); continue; }
             break;
           }
-          return parseJSON(j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "");
-        } catch (e) { lastErr = e; await sleep(800); }
+          const text = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+          if (!text) { lastErr = new Error(`Gemini (${model}): empty answer (${j.candidates?.[0]?.finishReason || j.promptFeedback?.blockReason || "no reason"})`); break; }
+          return parseJSON(text);
+        } catch (e) { lastErr = new Error(`Gemini (${model}): ${e.message}`); await sleep(500); }
       }
     }
-    throw new Error("All AI models are busy right now, please try again in a minute. " + (lastErr?.message || ""));
+    if (lastErr && errs.at(-1) !== lastErr.message) errs.push(lastErr.message);
+    throw new Error("All AI models are busy right now, please try again in a minute. " + errs.slice(-3).join(" | "));
   }
   if (anthropic) {
     const content = images.map(i => ({ type: "image", source: { type: "base64", media_type: i.mime, data: i.b64 } }));
@@ -185,8 +194,8 @@ function toReport(a) {
 }
 
 // Runs the AI on the photos and turns its answer into on-chain values. Throws if the AI fails.
-async function runAppraisal(imageUrl) {
-  const a = await askAI(await loadImages(imageUrl));
+async function runAppraisal(imageUrl, budgetMs) {
+  const a = await askAI(await loadImages(imageUrl), budgetMs);
   if (!a || !a.title) throw new Error("The appraiser could not read these photos, please try again");
   const rate = await eurPerXlm();
   const priceEur = Math.max(1, Number(a.price_eur) || 0);
@@ -263,7 +272,7 @@ export default async (req) => {
       if (!imageUrl) throw new Error("image_url required");
 
       // AI first (unless already done in /preview), so nothing is written on-chain if it fails
-      if (!p) p = await runAppraisal(imageUrl);
+      if (!p) p = await runAppraisal(imageUrl, id ? 18000 : 14000); // leave time for the on-chain writes
       const a = p.appraisal;
 
       if (!id) {
