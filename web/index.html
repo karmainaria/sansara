@@ -112,14 +112,15 @@ details.ai p{margin:6px 0 0}
   <section id="shop">
     <div class="hero">
       <h1>Old souls &amp; new hands.</h1>
-      <p>Antiques and handmade pieces, paid in crypto on Stellar. Your payment waits safely in escrow until the piece arrives.</p>
+      <p>Antiques, vintage and handmade pieces, paid in crypto on Stellar. Your payment waits safely in escrow until the piece arrives.</p>
     </div>
     <div id="installHint" class="install" hidden>Add Relic &amp; Thread to your home screen: tap <b>Share</b> → <b>Add to Home Screen</b>.</div>
     <div id="demoBanner" class="banner" hidden>Demo mode: add your CONTRACT_ID in the config to go live on testnet.</div>
     <div class="filters">
       <button class="chip on" data-cat="all">All</button>
-      <button class="chip" data-cat="0">Antique</button>
-      <button class="chip" data-cat="1">Handmade</button>
+      <button class="chip" data-cat="antique">Antique</button>
+      <button class="chip" data-cat="vintage">Vintage</button>
+      <button class="chip" data-cat="handmade">Handmade</button>
     </div>
     <div class="grid" id="grid"></div>
   </section>
@@ -162,7 +163,6 @@ const F = window.freighterApi;
 const PASSPHRASE = S.Networks[CONFIG.NETWORK];
 const server = new S.rpc.Server(CONFIG.RPC_URL);
 const STATUS = ["Listed","Paid","Disputed","Completed","Refunded","Cancelled","Pending"];
-const CAT = ["Antique","Handmade"];
 const ERR = {1:"Item not found",2:"Invalid price",3:"Invalid category",4:"Not possible in this state",5:"Only the buyer can do this",6:"Only the seller can do this",7:"You can't buy your own item",8:"Invalid fee",9:"Not part of this deal",10:"Add at least one photo"};
 let me = null, items = [], cat = "all";
 const DEMO = !CONFIG.CONTRACT_ID;
@@ -348,6 +348,9 @@ function parseReport(r){
   const o = {}; String(r||"").split("\n").forEach(l => { const i = l.indexOf(":"); if (i>0) o[l.slice(0,i).trim()] = l.slice(i+1).trim(); });
   return o;
 }
+// antique / vintage / handmade: from the AI report ("class"), else from the on-chain category
+const classOf = it => { const c = parseReport(it.report).class; return ["antique","vintage","handmade"].includes(c) ? c : (Number(it.category) ? "handmade" : "antique"); };
+const CLASS_LABEL = { antique: "Antique", vintage: "Vintage", handmade: "Handmade" };
 const firstImg = u => String(u||"").split(/\s+/).filter(Boolean)[0];
 
 function aiDetails(it){
@@ -373,7 +376,7 @@ function card(it, mode){
   return `<article class="card">
     <div class="img" style="background-image:url('${esc(firstImg(it.image_url) || placeholder(it))}')"></div>
     <div class="body">
-      <span class="tag">${CAT[Number(it.category)]||""} · #${it.id}</span>
+      <span class="tag">${st==="Pending" ? "" : CLASS_LABEL[classOf(it)]+" · "}#${it.id}</span>
       <h3>${esc(it.title || "Awaiting AI appraisal")}</h3>
       <p>${esc(it.description)}</p>
       ${aiDetails(it)}
@@ -383,7 +386,7 @@ function card(it, mode){
 }
 
 function render(){
-  const shop = items.filter(i => STATUS[Number(i.status)]==="Listed" && (cat==="all" || String(i.category)===cat));
+  const shop = items.filter(i => STATUS[Number(i.status)]==="Listed" && (cat==="all" || classOf(i)===cat));
   $("#grid").innerHTML = shop.length ? shop.map(i=>card(i,"shop")).join("") : '<div class="empty">Nothing here yet. Be the first to list a piece.</div>';
   const mine = me ? items.filter(i => i.seller===me || i.buyer===me) : [];
   $("#mineGrid").innerHTML = !me ? '<div class="empty">Connect your wallet to see your deals.</div>'
@@ -440,14 +443,14 @@ async function api(path, body){
   if (!CONFIG.APPRAISER_URL) throw new Error("The AI appraiser is offline right now");
   const r = await fetch(CONFIG.APPRAISER_URL.replace(/\/$/,"") + path, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || "Appraiser error " + r.status);
+  if (!r.ok) throw Object.assign(new Error(j.error || "Appraiser error " + r.status), { rejected: !!j.rejected });
   return j;
 }
 
 function showAppraisal(res){
   const a = res.appraisal, f = (k,v) => v && v!=="unknown" ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "";
   $("#appraisal").innerHTML = `<div class="appraisal">
-    <span class="pill">${a.category==="handmade"?"Handmade":"Antique"} · ${esc(a.confidence)} confidence · #${res.id}</span>
+    <span class="pill">${CLASS_LABEL[a.class]||"Antique"} · ${esc(a.confidence)} confidence · #${res.id}</span>
     <h2>${esc(a.title)}</h2>
     <div class="bigprice">${res.price_xlm.toLocaleString("en-US",{maximumFractionDigits:2})} XLM <span class="status">≈ €${Math.round(a.price_eur)}</span></div>
     <p class="note">${esc(a.short_description)}</p>
@@ -485,7 +488,10 @@ $("#sellForm").onsubmit = async e => {
     photos = []; $("#thumbs").innerHTML = "";
     if (!me) $("#sellNote").textContent = "Listed with the demo seller account. Connect a wallet to list under your own name.";
     load();
-  } catch(err){ $("#appraisal").innerHTML = ""; toast(niceError(err), 6000); }
+  } catch(err){
+    if (err.rejected) $("#appraisal").innerHTML = `<div class="appraisal"><h2>Not listed</h2><p>${esc(err.message)}</p><p class="note">Nothing was written on-chain.</p></div>`;
+    else { $("#appraisal").innerHTML = ""; toast(niceError(err), 6000); }
+  }
   btn.disabled = !photos.length;
 };
 

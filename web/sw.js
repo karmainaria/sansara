@@ -1,5 +1,5 @@
 // Relic & Thread service worker: app shell offline, always fresh when online
-const CACHE = "rt-v3";
+const CACHE = "rt-v4";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

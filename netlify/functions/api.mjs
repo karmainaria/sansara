@@ -1,6 +1,7 @@
 // Relic & Thread — AI appraiser agent as a Netlify Function (runs 24/7, no Codespace needed).
 // Routes:  POST /api/upload    photos -> Netlify Blobs, returns public URLs
 //          POST /api/preview   AI appraises the uploaded photos; nothing is written on-chain yet.
+//                              Modern factory-made pieces are rejected with 422 { rejected: true }.
 //                              Returns { token, appraisal, price_xlm } (appraisal kept in Netlify Blobs)
 //          POST /api/appraise  writes an appraisal on-chain:
 //                                { token, id }  wallet already signed submit_item -> appraise(id) with the stored appraisal
@@ -38,14 +39,19 @@ Examine the photos carefully. Look for hallmarks, maker's marks, stamps, signatu
 silver purity marks, factory labels, patent numbers, construction techniques, materials, wear and patina, and stylistic features.
 Use these clues together with historical knowledge (design movements, manufacturers' active years, historical events,
 changes in marking laws) to date the object as precisely as the evidence allows.
-If it looks newly handmade (crafts, jewelry, ceramics by an independent maker), treat it as "handmade" and value it as such.
+Classify the piece into exactly one "class":
+ - "antique": about 100 or more years old.
+ - "vintage": about 20 to 99 years old (factory-made is fine).
+ - "handmade": made by hand by an independent maker (crafts, jewelry, ceramics, textiles...), any age.
+ - "modern": under about 20 years old AND mass-produced / factory-made. Such pieces are not accepted.
+If a piece is both old and handmade, prefer "antique" or "vintage" by age; use "handmade" for recent work by an independent maker.
 Estimate a fair price for selling it online today in EUR, considering condition.
 Be honest: if marks are unreadable or evidence is thin, say so and lower the confidence. Never invent a maker.
 
 Reply with ONLY a JSON object, no markdown:
 {
  "title": "short listing title, max 60 chars",
- "category": "antique" or "handmade",
+ "class": "antique" | "vintage" | "handmade" | "modern",
  "short_description": "1-2 sentences for the listing, max 220 chars",
  "era": "e.g. c. 1920-1930",
  "origin": "country / region, or 'unknown'",
@@ -185,7 +191,7 @@ const clip = (s, n) => String(s || "").replace(/\s+/g, " ").trim().slice(0, n);
 
 function toReport(a) {
   const lines = {
-    era: a.era, origin: a.origin, maker: a.maker, marks: a.marks, materials: a.materials,
+    class: a.class, era: a.era, origin: a.origin, maker: a.maker, marks: a.marks, materials: a.materials,
     condition: a.condition, story: a.story,
     value: `${Math.round(a.value_eur_low)}–${Math.round(a.value_eur_high)} EUR`,
     price_eur: Math.round(a.price_eur), confidence: a.confidence, reasoning: a.reasoning,
@@ -193,14 +199,22 @@ function toReport(a) {
   return Object.entries(lines).map(([k, v]) => `${k}: ${clip(v, 600)}`).join("\n").slice(0, 2000);
 }
 
+const CLASSES = ["antique", "vintage", "handmade", "modern"];
+const MODERN_MSG = "This looks like a modern factory-made piece. Relic & Thread is for antiques, vintage and handmade work.";
+class Rejected extends Error {}
+
 // Runs the AI on the photos and turns its answer into on-chain values. Throws if the AI fails.
 async function runAppraisal(imageUrl, budgetMs) {
   const a = await askAI(await loadImages(imageUrl), budgetMs);
   if (!a || !a.title) throw new Error("The appraiser could not read these photos, please try again");
+  a.class = String(a.class || a.category || "").toLowerCase().trim();
+  if (!CLASSES.includes(a.class)) a.class = "vintage";
+  if (a.class === "modern") throw new Rejected(MODERN_MSG);
   const rate = await eurPerXlm();
   const priceEur = Math.max(1, Number(a.price_eur) || 0);
   const stroops = String(Math.max(1, Math.round((priceEur / rate) * 1e7)));
-  const category = String(a.category).toLowerCase() === "handmade" ? 1 : 0;
+  // until the contract has a vintage category: antique and vintage are both on-chain category 0
+  const category = a.class === "handmade" ? 1 : 0;
   return { appraisal: a, rate, stroops, category };
 }
 
@@ -290,6 +304,7 @@ export default async (req) => {
 
     return json(404, { error: "not found" });
   } catch (e) {
+    if (e instanceof Rejected) return json(422, { error: e.message, rejected: true });
     console.error(e);
     return json(400, { error: String(e.message || e).slice(0, 400) });
   }

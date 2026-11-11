@@ -186,6 +186,8 @@ Netlify environment variables: `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash`
 | `POST /api/preview` | AI appraises the photos; nothing is written on-chain yet. Returns `token`, appraisal, price |
 | `POST /api/appraise` | `{token,id}` writes the stored appraisal for an item the wallet just submitted; `{token}` lists it with the demo seller; `{id}` re-appraises a stuck `Pending` item |
 
+**Classes:** the AI puts every piece into one class: `antique` (about 100+ years), `vintage` (20–99 years, factory-made allowed), `handmade` (made by hand by an independent maker, any age) or `modern` (under ~20 years and factory-made). Modern pieces are rejected (`422`, nothing is written on-chain). The class is stored as `class:` in the on-chain report; on-chain `category` is `0` for antique and vintage and `1` for handmade, until the contract gets a separate vintage category.
+
 **Sell flow:** upload → AI preview → (wallet signs `submit_item`) → appraiser signs `appraise`. Because the AI runs first, a failed appraisal never leaves an empty *Awaiting AI appraisal* item on-chain.
 
 ## Business model
