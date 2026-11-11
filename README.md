@@ -54,8 +54,8 @@ The antiques & collectibles market was about **$150B in 2025, with 67% of sales 
 
 ```mermaid
 flowchart LR
-  P[Seller's phone<br/>PWA] -- photos --> S[AI appraiser server<br/>Node.js]
-  S -- images --> G[Vision model<br/>Gemini / Claude]
+  P[Seller's phone<br/>PWA] -- photos --> S[AI appraiser<br/>Netlify Function]
+  S -- images --> G[Vision model<br/>Gemini]
   G -- era, origin, story, price --> S
   S -- "appraise() signed with<br/>appraiser key" --> C[(Soroban contract<br/>Relic & Thread)]
   B[Buyer<br/>Albedo / Freighter] -- "buy() → escrow" --> C
@@ -112,8 +112,9 @@ Status codes: `0 Listed · 1 Paid · 2 Disputed · 3 Completed · 4 Refunded · 
 ```
 contracts/marketplace/src/lib.rs   Soroban contract
 contracts/marketplace/src/test.rs  unit tests
-server/server.mjs                  AI appraiser agent (HTTP API + Stellar CLI signer)
-server/start.sh                    starts the appraiser and makes its port public (Codespaces)
+netlify/functions/api.mjs          AI appraiser agent, live at https://relic-and-thread.netlify.app/api
+netlify.toml                       Netlify config (publishes docs/, deploys the function)
+server/server.mjs, server/start.sh older Codespaces version of the appraiser (kept for local runs)
 web/                               web app source (PWA: index.html, manifest, service worker, icons)
 docs/                              copy of web/ served by GitHub Pages, plus uploaded listing photos
 deploy.sh                          build, test and deploy the contract to testnet
@@ -149,8 +150,8 @@ cp web/* docs/ && cd docs && python3 -m http.server 8080
 | Variable | Required | Meaning |
 |---|---|---|
 | `CONTRACT_ID` | yes | Marketplace contract address |
-| `GEMINI_API_KEY` | one of these | Google AI Studio key (free tier works) |
-| `ANTHROPIC_API_KEY` | one of these | Claude API key (used first if both are set) |
+| `GEMINI_API_KEY` | yes | Google AI Studio key (free tier works); always used when set |
+| `ANTHROPIC_API_KEY` | no | Optional fallback, only used when no Gemini key is set |
 | `GEMINI_MODEL` | no | Preferred model, default `gemini-2.5-flash`; the server falls back to other Gemini models when one is overloaded |
 | `ANTHROPIC_MODEL` | no | Claude model id |
 | `STELLAR_NETWORK` | no | `testnet` (default) |
@@ -173,7 +174,19 @@ The appraiser signs with the Stellar CLI identity named `appraiser`; the demo se
 5. **Complete:** in *My deals* tap *Got it ✓* and sign. Status becomes *Completed*; the seller and the platform are paid.
 6. Check every step on the [contract page](https://stellar.expert/explorer/testnet/contract/CBPXUJWJ4BYYSV35XYWEL2NCUFK7UCZPELWV43PZLHNXJNXAUBDQ445O).
 
-> The AI appraiser runs in a GitHub Codespace. If *Sell* says the appraiser is offline, the Codespace is asleep; browsing, buying and confirming still work because they only need the contract.
+### AI appraiser on Netlify
+
+The appraiser runs 24/7 as a Netlify Function (`netlify/functions/api.mjs`, site `relic-and-thread`). Photos are stored in Netlify Blobs.
+Netlify environment variables: `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash`, `CONTRACT_ID`, `APPRAISER_SECRET`, `SELLER_SECRET` (secret keys of the `appraiser` and `seller` identities). Deploy with `netlify deploy --prod`.
+
+| Route | What it does |
+|---|---|
+| `GET /api/health` | `{"ok":true,"provider":"gemini",...}` |
+| `POST /api/upload` | photos → Netlify Blobs, returns `image_url` |
+| `POST /api/preview` | AI appraises the photos; nothing is written on-chain yet. Returns `token`, appraisal, price |
+| `POST /api/appraise` | `{token,id}` writes the stored appraisal for an item the wallet just submitted; `{token}` lists it with the demo seller; `{id}` re-appraises a stuck `Pending` item |
+
+**Sell flow:** upload → AI preview → (wallet signs `submit_item`) → appraiser signs `appraise`. Because the AI runs first, a failed appraisal never leaves an empty *Awaiting AI appraisal* item on-chain.
 
 ## Business model
 
